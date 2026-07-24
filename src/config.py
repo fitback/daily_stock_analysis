@@ -1588,9 +1588,14 @@ class Config:
         # schedule-specific alias is absent, schedule mode should inherit the
         # legacy process value instead of being pulled back to the persisted
         # `.env` copy of SCHEDULE_RUN_IMMEDIATELY.
+        # Use _had_bootstrap_runtime_env_key (presence) rather than
+        # _has_bootstrap_runtime_env_override (differs from .env): a process
+        # env value that happens to match .env is still an explicit intent,
+        # and PR #1249's stricter check regressed PR #735's fallback contract
+        # (see test_schedule_run_immediately_falls_back_to_legacy_run_immediately).
         if (
             not cls._had_bootstrap_runtime_env_key('SCHEDULE_RUN_IMMEDIATELY')
-            and cls._has_bootstrap_runtime_env_override('RUN_IMMEDIATELY')
+            and cls._had_bootstrap_runtime_env_key('RUN_IMMEDIATELY')
         ):
             schedule_run_immediately = legacy_run_immediately
         else:
