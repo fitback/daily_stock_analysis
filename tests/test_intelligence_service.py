@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 import json
+import pathlib
 import socket
 import tempfile
 import threading
@@ -51,11 +52,18 @@ NEWSNOW_FIXTURE = {
 class IntelligenceServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
+        # Establish an isolated .env BEFORE any Config-touching init runs,
+        # otherwise setup_env() (triggered transitively via Config) loads the
+        # system .env into os.environ, leaking LLM_CHANNELS / LITELLM_* keys
+        # into subsequent test modules (see test_system_config_service failures).
+        self._env_path = pathlib.Path(self._temp_dir.name) / ".env"
+        self._env_path.write_text("", encoding="utf-8")
+        os.environ["ENV_FILE"] = str(self._env_path)
         os.environ["DATABASE_PATH"] = os.path.join(self._temp_dir.name, "intelligence.db")
         os.environ["NEWS_INTEL_RETENTION_DAYS"] = "30"
         os.environ["NEWS_INTEL_MAX_ITEMS_PER_SOURCE"] = "50"
         os.environ["NEWS_INTEL_FETCH_TIMEOUT_SEC"] = "3"
-        Config._instance = None
+        Config.reset_instance()
         DatabaseManager.reset_instance()
         IntelligenceService.reset_auto_fetch_state()
         self.service = IntelligenceService()
@@ -92,7 +100,7 @@ class IntelligenceServiceTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         DatabaseManager.reset_instance()
-        Config._instance = None
+        Config.reset_instance()
         IntelligenceService.reset_auto_fetch_state()
         for key in [
             "DATABASE_PATH",
@@ -100,6 +108,7 @@ class IntelligenceServiceTestCase(unittest.TestCase):
             "NEWS_INTEL_MAX_ITEMS_PER_SOURCE",
             "NEWS_INTEL_FETCH_TIMEOUT_SEC",
             "NEWS_INTEL_AUTO_FETCH_ENABLED",
+            "ENV_FILE",
         ]:
             os.environ.pop(key, None)
         self._temp_dir.cleanup()
