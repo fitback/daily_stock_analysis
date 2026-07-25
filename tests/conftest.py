@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import os
 import time
 import threading
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,7 @@ from typing import Any, TypeVar
 from warnings import warn
 
 import anyio.to_thread
+import pytest
 import fastapi.testclient
 import httpx
 import starlette.testclient
@@ -249,3 +251,60 @@ class _ThreadlessTestClient:
 
 fastapi.testclient.TestClient = _ThreadlessTestClient
 starlette.testclient.TestClient = _ThreadlessTestClient
+
+
+# Keys that setup_env() may load from a project-root .env (without ENV_FILE
+# being set yet) and that then leak into os.environ for the rest of the
+# pytest session because load_dotenv(override=False) does not replace
+# existing values. Without this fixture, test_system_config_service and
+# test_system_config_api tests that run AFTER something triggers
+# setup_env() with the system .env see stale LLM_CHANNELS / LITELLM_*
+# values and report "Available models: openai/MiniMax-*" instead of
+# respecting the test-isolated .env fixture.
+_LEAKED_CONFIG_KEYS = frozenset(
+    {
+        "LLM_CHANNELS",
+        "LITELLM_CONFIG",
+        "LITELLM_MODEL",
+        "LITELLM_FALLBACK_MODELS",
+        "VISION_MODEL",
+        "LLM_MINIMAX_PROTOCOL",
+        "LLM_MINIMAX_BASE_URL",
+        "LLM_MINIMAX_ENABLED",
+        "LLM_MINIMAX_API_KEY",
+        "LLM_MINIMAX_API_KEYS",
+        "LLM_MINIMAX_MODELS",
+        "AGENT_BACKEND",
+        "AGENT_GENERATION_BACKEND",
+        "AGENT_LITELLM_MODEL",
+        "AGENT_ARCH",
+        "AGENT_ORCHESTRATOR_TIMEOUT_S",
+    }
+)
+
+
+@pytest.fixture(autouse=True)
+def _scrub_leaked_env_keys() -> Any:
+    """Remove os.environ keys that may have leaked from a prior module's
+    setup_env() call so per-test .env fixtures can establish a clean slate.
+
+    See _LEAKED_CONFIG_KEYS docstring for the full rationale.
+    """
+    # Lazy import to avoid circular deps at collection time
+    from src.config import Config
+
+    saved = {key: os.environ[key] for key in _LEAKED_CONFIG_KEYS if key in os.environ}
+    for key in _LEAKED_CONFIG_KEYS:
+        os.environ.pop(key, None)
+    # Also reset Config's bootstrap env capture state so the next
+    # Config.get_instance() call re-captures against the cleaned os.environ.
+    Config._BOOTSTRAP_RUNTIME_ENV_OVERRIDES_CAPTURED = False
+    Config._BOOTSTRAP_RUNTIME_ENV_OVERRIDES = frozenset()
+    Config._BOOTSTRAP_RUNTIME_ENV_PRESENT_KEYS = frozenset()
+    try:
+        yield
+    finally:
+        for key in _LEAKED_CONFIG_KEYS:
+            os.environ.pop(key, None)
+        for key, value in saved.items():
+            os.environ[key] = value

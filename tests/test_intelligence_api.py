@@ -23,8 +23,13 @@ RSS_FIXTURE = b'<?xml version="1.0" encoding="UTF-8"?>\n<rss version="2.0"><chan
 class IntelligenceApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
+        # Isolate from the project .env before any Config-touching init runs;
+        # see tests/test_intelligence_service.py for the full rationale.
+        self._env_path = Path(self._temp_dir.name) / ".env"
+        self._env_path.write_text("", encoding="utf-8")
+        os.environ["ENV_FILE"] = str(self._env_path)
         os.environ["DATABASE_PATH"] = os.path.join(self._temp_dir.name, "api_intel.db")
-        Config._instance = None
+        Config.reset_instance()
         DatabaseManager.reset_instance()
         self._dns_patcher = patch(
             "src.services.intelligence_service.socket.getaddrinfo",
@@ -36,8 +41,9 @@ class IntelligenceApiTestCase(unittest.TestCase):
 
     def tearDown(self) -> None:
         DatabaseManager.reset_instance()
-        Config._instance = None
+        Config.reset_instance()
         os.environ.pop("DATABASE_PATH", None)
+        os.environ.pop("ENV_FILE", None)
         self._temp_dir.cleanup()
 
     def _mock_response(self):
